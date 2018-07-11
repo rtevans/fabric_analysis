@@ -4,8 +4,8 @@ LDFLAGS=-L/home1/02561/rtevans/opa-ff/builtlibs.OPENIB_FF.release -lTopology -lo
 
 all: opa_trace opa_pma opa_lids
 
-opa_trace: opa_trace.c opareport.o
-	$(CC) opa_trace.c -o opa_trace opareport.o $(CFLAGS) $(LDFLAGS)
+opa_trace: opa_trace.c
+	$(CC) opa_trace.c -o opa_trace $(CFLAGS) $(LDFLAGS)
 
 opa_lids: opa_lids.c
 	$(CC) opa_lids.c -o opa_lids $(CFLAGS) $(LDFLAGS)

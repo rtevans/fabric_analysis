@@ -3,15 +3,14 @@
 #include <oib_utils.h>
 #include <oib_utils_sa.h>
 #include <topology.h>
-#include <opareport.h>
 #include <getopt.h>
-/*
+
 int                     g_exitstatus  = 0;
 int                     g_quiet       = 1;    // omit progress output
 EUI64                   g_portGuid    = -1;   // local port to use to access fabric
 IB_PORT_ATTRIBUTES      *g_portAttrib = NULL;// attributes for our local port
 FabricData_t            g_Fabric;
-*/
+
 static void usage(void)
 {
   fprintf(stderr,
@@ -131,8 +130,6 @@ int main(int argc, char** argv) {
   PortData *portp1 = point1.u.portp;
   PortData *portp2 = point2.u.portp;
 
-  printf("%s %s %u\n", (char*)portp1->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp1->nodep->NodeInfo.NodeType), portp1->PortNum);
-
   fstatus = oib_open_port_by_guid(&oib_port_session, g_portGuid);
   if (FSUCCESS != fstatus)
     goto done;
@@ -142,30 +139,36 @@ int main(int argc, char** argv) {
     goto done;
   NumPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->NumPathRecords;
   pPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->PathRecords;
-
+  printf("path recs %d\n",NumPathRecords);
 
   int i,j;
   for (i = 0; i < NumPathRecords; i++) {    
-
     fstatus = GetTraceRoute(oib_port_session, &pPathRecords[i], &ptQueryResults);
     if (FSUCCESS != fstatus) {
       goto done;
     }
     NumTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->NumTraceRecords;
     pTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->TraceRecords;
-	
-    for (j=0; j < NumTraceRecords; j++) {        
-      portp1 = portp1->neighbor;
-      printf("%s %s %u\n", (char*)portp1->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp1->nodep->NodeInfo.NodeType), portp1->PortNum);
 
-      portp1 = FindNodePort(portp1->nodep, pTraceRecords[i].ExitPort);
+    PortData *tport = portp1;    
+    printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
+	   StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);    
+    for (j = 1; j < NumTraceRecords; j++) {        
+      if (pTraceRecords[j].NodeType == STL_NODE_FI)
+	break;
+      tport = tport->neighbor;
+      printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
+	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
+      tport = FindNodePort(tport->nodep, pTraceRecords[j].ExitPort);    
       
-      printf("%s %s %u\n", (char*)portp1->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp1->nodep->NodeInfo.NodeType), portp1->PortNum);
-    }    
-  }
-  printf("%s %s %u\n", (char*)portp2->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp2->nodep->NodeInfo.NodeType), portp2->PortNum);
+      printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
+	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
+    }
+    printf("%s %s %u\n", (char*)portp2->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp2->nodep->NodeInfo.NodeType), portp2->PortNum);
+  }    
 
-  ShowRoutesReport(g_portGuid, &point1, &point2, FORMAT_TEXT, 0, 2);
+
+  //ShowRoutesReport(g_portGuid, &point1, &point2, FORMAT_TEXT, 0, 2);
 
  done:
   PointDestroy(&point1);
