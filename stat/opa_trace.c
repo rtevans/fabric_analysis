@@ -4,12 +4,137 @@
 #include <oib_utils_sa.h>
 #include <topology.h>
 #include <getopt.h>
+#include "stl_print.h"
 
 int                     g_exitstatus  = 0;
 int                     g_quiet       = 1;    // omit progress output
 EUI64                   g_portGuid    = -1;   // local port to use to access fabric
 IB_PORT_ATTRIBUTES      *g_portAttrib = NULL;// attributes for our local port
 FabricData_t            g_Fabric;
+
+uint64_t g_transactID = 0xffffffff12340000;
+#define RESP_WAIT_TIME (1000)   // 1000 milliseconds for receive response
+PrintDest_t g_dest;
+
+static int get_numports(uint64 portmask)
+{
+  int i;
+  int nports = 0;
+  for (i = 0; i < MAX_PM_PORTS; i++) {
+    if ((portmask >> i) & (uint64)1)
+      nports++;
+  }
+  return nports;
+}
+
+static int get_stats(uint32_t dlid, uint32_t port)
+{
+
+  int status = 0;
+  struct oib_port *mad_port = NULL;
+  STL_SMP smp;
+  STL_PERF_MAD *mad = (STL_PERF_MAD*)&smp;
+  MemoryClear(mad, sizeof(*mad));
+
+  STL_DATA_PORT_COUNTERS_REQ *pStlDataPortCountersReq = (STL_DATA_PORT_COUNTERS_REQ *)&(mad->PerfData);
+  STL_DATA_PORT_COUNTERS_RSP *pStlDataPortCountersRsp;
+
+  uint32 attrmod;
+  uint64 portmask = (uint64)1 << port;
+  pStlDataPortCountersReq->PortSelectMask[3] = portmask;
+  pStlDataPortCountersReq->VLSelectMask = 0x1;
+  attrmod = get_numports(portmask) << 24;
+
+  BSWAP_STL_DATA_PORT_COUNTERS_REQ(pStlDataPortCountersReq);
+
+  mad->common.BaseVersion = STL_BASE_VERSION;
+  mad->common.ClassVersion = STL_PM_CLASS_VERSION;
+  mad->common.MgmtClass = MCLASS_PERF;
+  mad->common.u.NS.Status.AsReg16 = 0;
+  mad->common.mr.AsReg8 = 0;
+  mad->common.mr.s.Method = MMTHD_GET;
+  mad->common.AttributeID = STL_PM_ATTRIB_ID_DATA_PORT_COUNTERS;
+  mad->common.TransactionID = (++g_transactID);
+  mad->common.AttributeModifier = attrmod;
+
+  oib_open_port_by_num(&mad_port, 0, 1);
+
+  if (oib_get_port_state(mad_port) != IB_PORT_ACTIVE)
+    fprintf(stderr, "WARNING port (%s:%d) is not ACTIVE!\n",
+            oib_get_hfi_name(mad_port),
+            oib_get_hfi_port_num(mad_port));
+
+  uint16_t pkey = oib_get_mgmt_pkey(mad_port, 0, 0);
+  if (pkey==0) {
+    fprintf(stderr, "ERROR: Local port does not have management privileges\n");
+    return (FPROTECTION);
+  }
+
+  BSWAP_MAD_HEADER((MAD*)mad);
+  {
+    struct oib_mad_addr addr = {
+    lid  : dlid,
+    qpn  : 1,
+    qkey : QP1_WELL_KNOWN_Q_KEY,
+    pkey : pkey,
+    sl   : 0
+    };
+    size_t recv_size = sizeof(*mad);
+    status = oib_send_recv_mad_no_alloc(mad_port, (uint8_t *)mad,
+                                        sizeof(STL_DATA_PORT_COUNTERS_REQ)+sizeof(MAD_COMMON),
+                                        &addr,
+                                        (uint8_t *)mad,
+                                        &recv_size, RESP_WAIT_TIME, 0);
+  }
+  BSWAP_MAD_HEADER((MAD*)mad);
+
+  /*
+  PrintDestInitFile(&g_dest, stdout);
+  if (status == FSUCCESS) {
+    PrintFunc(&g_dest, "Received MAD:\n");
+    PrintMadHeader(&g_dest, 2, &mad->common);
+    PrintSeparator(&g_dest);
+  }
+  */
+
+  pStlDataPortCountersRsp = (STL_DATA_PORT_COUNTERS_RSP *)pStlDataPortCountersReq;
+  BSWAP_STL_DATA_PORT_COUNTERS_RSP(pStlDataPortCountersRsp);
+  //PrintStlDataPortCountersRsp(&g_dest, 0, pStlDataPortCountersRsp);
+
+  struct _port_dpctrs *dPort;
+  dPort = (struct _port_dpctrs *)&(pStlDataPortCountersRsp->Port[0]);
+
+  printf("xmit data %20"PRIu64" MB\n", dPort->PortXmitData/FLITS_PER_MB);
+  printf("rcv  data %20"PRIu64" MB\n", dPort->PortRcvData/FLITS_PER_MB);
+  printf("xmit flits %20"PRIu64"  \n", dPort->PortXmitData);
+  printf("rcv  flits %20"PRIu64"  \n", dPort->PortRcvData);
+
+  printf("xmit pkts %20"PRIu64"   \n", dPort->PortXmitPkts);
+  printf("rcv  pkts %20"PRIu64"   \n", dPort->PortRcvPkts);
+  printf("MC Xmit Pkts %20"PRIu64"\n", dPort->PortMulticastXmitPkts);
+  printf("MC Rcv Pkts  %20"PRIu64"\n", dPort->PortMulticastRcvPkts);
+
+  printf("cong disc %20"PRIu64"   \n", dPort->SwPortCongestion);
+  printf("rcv  FECN %20"PRIu64"   \n", dPort->PortRcvFECN);
+  printf("rcv  BECN %20"PRIu64"   \n", dPort->PortRcvBECN);
+  printf("mark FECN %20"PRIu64"   \n", dPort->PortMarkFECN);
+  printf("Xmit Time Cong %20"PRIu64"\n", dPort->PortXmitTimeCong);
+  printf( "Xmit Wait %20"PRIu64"\n", dPort->PortXmitWait);
+
+  printf( "Xmit Wasted BW %20"PRIu64"\n", dPort->PortXmitWastedBW);
+  printf( "Xmit Wait Data %20"PRIu64"\n", dPort->PortXmitWaitData);
+  printf( "Rcv Bubble %20"PRIu64"\n", dPort->PortRcvBubble);
+  printf("\n");
+  if (FSUCCESS == status && mad->common.u.NS.Status.AsReg16 != MAD_STATUS_SUCCESS) {
+    fprintf(stderr, "MAD returned with Bad Status: %s\n",
+            iba_mad_status_msg2(mad->common.u.NS.Status.AsReg16));
+    return FERROR;
+  }
+
+  if (mad_port != NULL)
+    oib_close_port(mad_port);
+  return status;
+}
 
 static void usage(void)
 {
@@ -153,22 +278,23 @@ int main(int argc, char** argv) {
     PortData *tport = portp1;    
     printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
 	   StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);    
+    get_stats(tport->EndPortLID, tport->PortNum);
     for (j = 1; j < NumTraceRecords; j++) {        
       if (pTraceRecords[j].NodeType == STL_NODE_FI)
 	break;
       tport = tport->neighbor;
       printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
 	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
-      tport = FindNodePort(tport->nodep, pTraceRecords[j].ExitPort);    
-      
+      get_stats(tport->EndPortLID, tport->PortNum);
+      tport = FindNodePort(tport->nodep, pTraceRecords[j].ExitPort);          
       printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
 	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
+      get_stats(tport->EndPortLID, tport->PortNum);
     }
     printf("%s %s %u\n", (char*)portp2->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp2->nodep->NodeInfo.NodeType), portp2->PortNum);
+    get_stats(tport->EndPortLID, tport->PortNum);
+    break;
   }    
-
-
-  //ShowRoutesReport(g_portGuid, &point1, &point2, FORMAT_TEXT, 0, 2);
 
  done:
   PointDestroy(&point1);
