@@ -1,3 +1,4 @@
+#include <time.h>
 #include <stdio.h>
 #include <iba/public/iquickmap.h>
 #include <oib_utils.h>
@@ -5,6 +6,8 @@
 #include <topology.h>
 #include <getopt.h>
 #include "stl_print.h"
+
+// Ex) ./opa_trace -s node:"c591-103 hfi1_0":port:1  -d node:"c591-104 hfi1_0":port:1
 
 int                     g_exitstatus  = 0;
 int                     g_quiet       = 1;    // omit progress output
@@ -26,10 +29,33 @@ static int get_numports(uint64 portmask)
   }
   return nports;
 }
-
-static int get_stats(uint32_t dlid, uint32_t port)
+static int a = 0;
+struct _port_dpctrs *dold;
+void print_ctrs(PortData *portdata, STL_DATA_PORT_COUNTERS_RSP *portctrs) 
 {
 
+  struct _port_dpctrs *d;
+  d = (struct _port_dpctrs *)&(portctrs->Port[0]);
+
+
+  if (a>0) {
+    
+  printf("%20s[%d] %15"PRIu64" %15"PRIu64" %15"PRIu64" %15"PRIu64" %15"PRIu64"%15"PRIu64" %15"PRIu64" %15"PRIu64" %12"PRIu64" %12"PRIu64" %12"PRIu64" %12"PRIu64" %12"PRIu64" %15"PRIu64"\n",
+	 (char*)portdata->nodep->NodeDesc.NodeString, portdata->PortNum, 
+	 d->PortXmitData/FLITS_PER_MB,
+	 //-dold->PortXmitData/FLITS_PER_MB, 
+	 d->PortRcvData/FLITS_PER_MB, d->PortXmitData, d->PortRcvData, d->PortXmitPkts, d->PortRcvPkts, d->PortMulticastXmitPkts, d->PortMulticastRcvPkts,
+	 d->SwPortCongestion, d->PortRcvFECN, d->PortRcvBECN, d->PortMarkFECN, d->PortXmitTimeCong, d->PortXmitWait);
+    
+  }
+  a+=1;
+  //memcpy(dold, d, sizeof(struct _port_dpctrs));
+  //printf("%15"PRIu64"\n", 	 -dold->PortXmitData/FLITS_PER_MB);
+  fflush(stdout);
+}
+
+static int get_stats(PortData *portdata)
+{
   int status = 0;
   struct oib_port *mad_port = NULL;
   STL_SMP smp;
@@ -40,7 +66,8 @@ static int get_stats(uint32_t dlid, uint32_t port)
   STL_DATA_PORT_COUNTERS_RSP *pStlDataPortCountersRsp;
 
   uint32 attrmod;
-  uint64 portmask = (uint64)1 << port;
+  uint64 portmask = (uint64)1 << portdata->PortNum;
+
   pStlDataPortCountersReq->PortSelectMask[3] = portmask;
   pStlDataPortCountersReq->VLSelectMask = 0x1;
   attrmod = get_numports(portmask) << 24;
@@ -73,7 +100,7 @@ static int get_stats(uint32_t dlid, uint32_t port)
   BSWAP_MAD_HEADER((MAD*)mad);
   {
     struct oib_mad_addr addr = {
-    lid  : dlid,
+    lid  : portdata->EndPortLID,
     qpn  : 1,
     qkey : QP1_WELL_KNOWN_Q_KEY,
     pkey : pkey,
@@ -88,43 +115,11 @@ static int get_stats(uint32_t dlid, uint32_t port)
   }
   BSWAP_MAD_HEADER((MAD*)mad);
 
-  /*
-  PrintDestInitFile(&g_dest, stdout);
-  if (status == FSUCCESS) {
-    PrintFunc(&g_dest, "Received MAD:\n");
-    PrintMadHeader(&g_dest, 2, &mad->common);
-    PrintSeparator(&g_dest);
-  }
-  */
-
   pStlDataPortCountersRsp = (STL_DATA_PORT_COUNTERS_RSP *)pStlDataPortCountersReq;
   BSWAP_STL_DATA_PORT_COUNTERS_RSP(pStlDataPortCountersRsp);
-  //PrintStlDataPortCountersRsp(&g_dest, 0, pStlDataPortCountersRsp);
 
-  struct _port_dpctrs *dPort;
-  dPort = (struct _port_dpctrs *)&(pStlDataPortCountersRsp->Port[0]);
+  print_ctrs(portdata, pStlDataPortCountersRsp);
 
-  printf("xmit data %20"PRIu64" MB\n", dPort->PortXmitData/FLITS_PER_MB);
-  printf("rcv  data %20"PRIu64" MB\n", dPort->PortRcvData/FLITS_PER_MB);
-  printf("xmit flits %20"PRIu64"  \n", dPort->PortXmitData);
-  printf("rcv  flits %20"PRIu64"  \n", dPort->PortRcvData);
-
-  printf("xmit pkts %20"PRIu64"   \n", dPort->PortXmitPkts);
-  printf("rcv  pkts %20"PRIu64"   \n", dPort->PortRcvPkts);
-  printf("MC Xmit Pkts %20"PRIu64"\n", dPort->PortMulticastXmitPkts);
-  printf("MC Rcv Pkts  %20"PRIu64"\n", dPort->PortMulticastRcvPkts);
-
-  printf("cong disc %20"PRIu64"   \n", dPort->SwPortCongestion);
-  printf("rcv  FECN %20"PRIu64"   \n", dPort->PortRcvFECN);
-  printf("rcv  BECN %20"PRIu64"   \n", dPort->PortRcvBECN);
-  printf("mark FECN %20"PRIu64"   \n", dPort->PortMarkFECN);
-  printf("Xmit Time Cong %20"PRIu64"\n", dPort->PortXmitTimeCong);
-  printf( "Xmit Wait %20"PRIu64"\n", dPort->PortXmitWait);
-
-  printf( "Xmit Wasted BW %20"PRIu64"\n", dPort->PortXmitWastedBW);
-  printf( "Xmit Wait Data %20"PRIu64"\n", dPort->PortXmitWaitData);
-  printf( "Rcv Bubble %20"PRIu64"\n", dPort->PortRcvBubble);
-  printf("\n");
   if (FSUCCESS == status && mad->common.u.NS.Status.AsReg16 != MAD_STATUS_SUCCESS) {
     fprintf(stderr, "MAD returned with Bad Status: %s\n",
             iba_mad_status_msg2(mad->common.u.NS.Status.AsReg16));
@@ -230,82 +225,93 @@ int main(int argc, char** argv) {
     g_exitstatus = 1;
     goto done;
   }
+  while(1) {
 
-  struct oib_port *oib_port_session = NULL;
-  PQUERY_RESULT_VALUES pQueryResults = NULL;
-  PQUERY_RESULT_VALUES ptQueryResults = NULL;
-  uint32 NumPathRecords;
-  IB_PATH_RECORD *pPathRecords = NULL;
-  uint32 NumTraceRecords;
-  STL_TRACE_RECORD	*pTraceRecords = NULL;
+    clock_t start = clock(), diff;
 
-  PointInit(&point1);
-  PointInit(&point2);
+    struct oib_port *oib_port_session = NULL;
+    PQUERY_RESULT_VALUES pQueryResults = NULL;
+    PQUERY_RESULT_VALUES ptQueryResults = NULL;
+    uint32 NumPathRecords;
+    IB_PATH_RECORD *pPathRecords = NULL;
+    uint32 NumTraceRecords;
+    STL_TRACE_RECORD	*pTraceRecords = NULL;
 
-  char *p;
+    PointInit(&point1);
+    PointInit(&point2);
 
-  if (FSUCCESS != (fstatus = ParsePoint(&g_Fabric, src, &point1, FIND_FLAG_FABRIC, &p)) || *p != '\0') {
-    goto done;
-  }
+    char *p;
 
-  if (FSUCCESS != (fstatus = ParsePoint(&g_Fabric, dst, &point2, FIND_FLAG_FABRIC, &p)) || *p != '\0') {
-    goto done;
-  }
-
-  PortData *portp1 = point1.u.portp;
-  PortData *portp2 = point2.u.portp;
-
-  fstatus = oib_open_port_by_guid(&oib_port_session, g_portGuid);
-  if (FSUCCESS != fstatus)
-    goto done;
-
-  fstatus = GetPaths(oib_port_session, portp1, portp2, &pQueryResults);
-  if (FSUCCESS != fstatus)
-    goto done;
-  NumPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->NumPathRecords;
-  pPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->PathRecords;
-  printf("path recs %d\n",NumPathRecords);
-
-  int i,j;
-  for (i = 0; i < NumPathRecords; i++) {    
-    fstatus = GetTraceRoute(oib_port_session, &pPathRecords[i], &ptQueryResults);
-    if (FSUCCESS != fstatus) {
+    if (FSUCCESS != (fstatus = ParsePoint(&g_Fabric, src, &point1, FIND_FLAG_FABRIC, &p)) || *p != '\0') {
       goto done;
     }
-    NumTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->NumTraceRecords;
-    pTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->TraceRecords;
 
-    PortData *tport = portp1;    
-    printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
-	   StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);    
-    get_stats(tport->EndPortLID, tport->PortNum);
-    for (j = 1; j < NumTraceRecords; j++) {        
-      if (pTraceRecords[j].NodeType == STL_NODE_FI)
-	break;
-      tport = tport->neighbor;
-      printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
-	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
-      get_stats(tport->EndPortLID, tport->PortNum);
-      tport = FindNodePort(tport->nodep, pTraceRecords[j].ExitPort);          
-      printf("%s %s %u\n", (char*)tport->nodep->NodeDesc.NodeString, 
-	     StlNodeTypeToText(tport->nodep->NodeInfo.NodeType), tport->PortNum);
-      get_stats(tport->EndPortLID, tport->PortNum);
+    if (FSUCCESS != (fstatus = ParsePoint(&g_Fabric, dst, &point2, FIND_FLAG_FABRIC, &p)) || *p != '\0') {
+      goto done;
     }
-    printf("%s %s %u\n", (char*)portp2->nodep->NodeDesc.NodeString, StlNodeTypeToText(portp2->nodep->NodeInfo.NodeType), portp2->PortNum);
-    get_stats(tport->EndPortLID, tport->PortNum);
-    break;
-  }    
 
- done:
-  PointDestroy(&point1);
-  PointDestroy(&point2);
-  DestroyMad();
-  if (pQueryResults)
-    oib_free_query_result_buffer(pQueryResults);
-  if (oib_port_session != NULL)
-    oib_close_port(oib_port_session);
-  //if (pPathRecords)
-  //MemoryDeallocate(pPathRecords);
+    PortData *portp1 = point1.u.portp;
+    PortData *portp2 = point2.u.portp;
 
+    fstatus = oib_open_port_by_guid(&oib_port_session, g_portGuid);
+    if (FSUCCESS != fstatus)
+      goto done;
+
+    fstatus = GetPaths(oib_port_session, portp1, portp2, &pQueryResults);
+    if (FSUCCESS != fstatus)
+      goto done;
+    NumPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->NumPathRecords;
+    pPathRecords = ((PATH_RESULTS*)pQueryResults->QueryResult)->PathRecords;
+
+    int i,j;
+    for (i = 0; i < NumPathRecords; i++) {    
+      fstatus = GetTraceRoute(oib_port_session, &pPathRecords[i], &ptQueryResults);
+      if (FSUCCESS != fstatus) {
+	goto done;
+      }
+      NumTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->NumTraceRecords;
+      pTraceRecords = ((STL_TRACE_RECORD_RESULTS*)ptQueryResults->QueryResult)->TraceRecords;
+
+      struct ctrs {
+	uint64 xmitdata[NumTraceRecords]; 
+      }; 
+      struct ctrs stats;
+      for (j = 0; j < NumTraceRecords; j++)
+	stats.xmitdata[j] = 0;
+
+      PortData *tport = portp1;    
+      printf("%23s %15s %15s %15s %15s %15s %15s %15s %15s %15s %12s %12s %12s %12s %12s\n", 
+	     "device", "xmitdata[MB]", "rcvdata[MB]", "xmitflits", "rcvflits", "xmitpkts", 
+	     "rcvpkts", "mcxmitpkts",  "mcrcvpkts", "congdisc", "rcvFECN", "rcvBECN", "markFECN", "xmitcong", "xmitwait"); 
+      get_stats(portp1);//, stats[0]);
+      for (j = 1; j < NumTraceRecords; j++) {        
+	if (pTraceRecords[j].NodeType == STL_NODE_FI)
+	  break;
+	tport = tport->neighbor;
+	get_stats(tport);
+	tport = FindNodePort(tport->nodep, pTraceRecords[j].ExitPort);          
+	get_stats(tport);
+      }
+      get_stats(portp2);
+      break;
+    }    
+
+  done:
+    PointDestroy(&point1);
+    PointDestroy(&point2);
+    DestroyMad();
+    if (pQueryResults)
+      oib_free_query_result_buffer(pQueryResults);
+    if (oib_port_session != NULL)
+      oib_close_port(oib_port_session);
+    //if (pPathRecords)
+    //MemoryDeallocate(pPathRecords);
+
+    diff = clock() - start;
+    int msec = diff * 1000 / CLOCKS_PER_SEC;
+    printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+    fflush(stdout);
+    sleep(2);
+  }
   return 0;
 }
