@@ -1,0 +1,4 @@
+*.txt
+stat/opa_trace
+stat/opa_lids
+stat/opa_pma
